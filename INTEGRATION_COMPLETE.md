@@ -99,9 +99,29 @@ All critical frontend-backend integration work has been completed. The mobile ap
 
 ## 🚀 Deployment Team Instructions
 
-### Step 1: Deploy Backend
+### Architecture Overview
 
-Deploy the backend using Serverless Framework:
+The project now has **TWO separate deployments**:
+1. **AI Layer**: Handles Claude/Bedrock AI calls (already deployed ✅)
+2. **Backend**: Main API that calls the AI layer
+
+### Step 1: Deploy AI Layer (Already Done!)
+
+The AI layer is already deployed at:
+```
+https://ksalbazufb.execute-api.us-east-1.amazonaws.com/dev/ai/itinerary/generate
+```
+
+**If you need to redeploy it:**
+```bash
+cd ai-layer
+npm install -g serverless@4  # If not already installed
+serverless deploy --stage dev
+```
+
+### Step 2: Deploy Backend
+
+Deploy the main backend using Serverless Framework:
 
 ```bash
 cd backend
@@ -111,13 +131,13 @@ serverless deploy --stage dev
 
 **Expected Output:**
 ```
-✔ Service deployed to stack localside-dev
-✔ API Gateway: https://XXXXXXXXXX.execute-api.us-east-1.amazonaws.com/dev
+✔ Service deployed to stack localside-backend-dev
+✔ API Gateway: https://YYYYYYYYYY.execute-api.us-east-1.amazonaws.com/dev
 ```
 
-**Copy the API Gateway URL** - you'll need it for Step 2.
+**Copy the API Gateway URL** - you'll need it for Step 3.
 
-### Step 2: Configure Mobile App API URL
+### Step 3: Configure Mobile App API URL
 
 Update the API base URL in the mobile app:
 
@@ -130,12 +150,12 @@ const API_BASE_URL = '';
 
 To:
 ```typescript
-const API_BASE_URL = 'https://XXXXXXXXXX.execute-api.us-east-1.amazonaws.com/dev';
+const API_BASE_URL = 'https://YYYYYYYYYY.execute-api.us-east-1.amazonaws.com/dev';
 ```
 
-Replace `XXXXXXXXXX` with your actual API Gateway ID from Step 1.
+Replace `YYYYYYYYYY` with your **backend** API Gateway ID from Step 2 (NOT the AI layer URL).
 
-### Step 3: Test the Integration
+### Step 4: Test the Integration
 
 After setting the API_BASE_URL:
 
@@ -165,9 +185,55 @@ After setting the API_BASE_URL:
 
 ---
 
+## 🏗️ Architecture Details
+
+### Two-Layer Architecture
+
+**Why separate the AI layer?**
+- **Cost Optimization**: AI layer can have higher Lambda timeout (60s) for Claude calls
+- **Scalability**: AI layer scales independently from backend
+- **Security**: AI layer handles expensive Bedrock calls separately
+- **Flexibility**: Can update prompts without redeploying entire backend
+
+**Request Flow**:
+```
+Mobile App → Backend API → AI Layer → AWS Bedrock (Claude)
+                ↓
+           DynamoDB
+```
+
+The backend acts as a proxy that:
+1. Authenticates users (JWT)
+2. Validates requests
+3. Calls the AI layer
+4. Saves results to DynamoDB
+5. Returns formatted response
+
+---
+
 ## 🔧 Configuration Details
 
 ### Environment Variables Needed
+
+**AI Layer** (already configured):
+```bash
+AWS_REGION=us-east-1
+BEDROCK_MODEL_ID=anthropic.claude-sonnet-4-6-20260217-v1:0
+JWT_SECRET=your-secret-key
+```
+
+**Backend**:
+```bash
+AI_LAYER_URL=https://ksalbazufb.execute-api.us-east-1.amazonaws.com/dev/ai/itinerary/generate
+JWT_SECRET=your-secret-key
+COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
+COGNITO_CLIENT_ID=XXXXXXXXXXXXXXXXXXXXXXXXXX
+S3_BUCKET_NAME=travel-assistant-uploads-XXX
+```
+
+**Note**: The AI_LAYER_URL is already configured in `backend/handlers/ai_itinerary.py:16-19` and points to the deployed AI layer.
+
+### Mobile App Configuration
 
 The mobile app currently uses a hardcoded API_BASE_URL. For production, you may want to use environment variables:
 
