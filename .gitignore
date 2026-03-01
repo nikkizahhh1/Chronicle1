@@ -41,3 +41,24 @@ BACKEND_API_REFERENCE.md
 
 # Logs
 *.log
+
+# Node.js / Frontend / Mobile
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+.expo/
+.expo-shared/
+dist/
+build/
+*.tgz
+
+# Mobile specific
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
