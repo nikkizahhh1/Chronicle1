@@ -1,4 +1,4 @@
-# Environment variables (contains API keys - DO NOT COMMIT)
+gi# Environment variables (contains API keys - DO NOT COMMIT)
 .env
 *.env
 !.env.example
@@ -27,6 +27,17 @@ ENV/
 # Backup files
 pois_backup.json
 *.json.bak
+
+# Dangerous scripts (can delete data)
+scraper/clear_pois.py
+
+# Infrastructure setup scripts (run manually, don't commit)
+infrastructure/setup_cognito.py
+infrastructure/setup_s3.py
+
+# Documentation files
+AWS_LOCATION_SERVICE_GUIDE.md
+BACKEND_API_REFERENCE.md
 
 # Logs
 *.log

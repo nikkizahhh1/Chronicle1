@@ -6,6 +6,9 @@ provider:
   region: us-east-1
   environment:
     JWT_SECRET: ${env:JWT_SECRET}
+    COGNITO_USER_POOL_ID: ${env:COGNITO_USER_POOL_ID}
+    COGNITO_CLIENT_ID: ${env:COGNITO_CLIENT_ID}
+    S3_BUCKET_NAME: ${env:S3_BUCKET_NAME}
   iam:
     role:
       statements:
@@ -22,6 +25,23 @@ provider:
             - "arn:aws:dynamodb:${self:provider.region}:*:table/trips"
             - "arn:aws:dynamodb:${self:provider.region}:*:table/travel-pois"
             - "arn:aws:dynamodb:${self:provider.region}:*:table/*/index/*"
+        - Effect: Allow
+          Action:
+            - cognito-idp:SignUp
+            - cognito-idp:InitiateAuth
+            - cognito-idp:ConfirmSignUp
+            - cognito-idp:ResendConfirmationCode
+            - cognito-idp:GetUser
+          Resource:
+            - "arn:aws:cognito-idp:${self:provider.region}:*:userpool/*"
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:DeleteObject
+            - s3:PutObjectAcl
+          Resource:
+            - "arn:aws:s3:::${env:S3_BUCKET_NAME}/*"
 
 functions:
   signup:
@@ -37,6 +57,22 @@ functions:
     events:
       - http:
           path: auth/login
+          method: post
+          cors: true
+
+  confirmSignup:
+    handler: handlers/auth.confirm_signup
+    events:
+      - http:
+          path: auth/confirm
+          method: post
+          cors: true
+
+  resendConfirmation:
+    handler: handlers/auth.resend_confirmation
+    events:
+      - http:
+          path: auth/resend
           method: post
           cors: true
 
@@ -94,6 +130,126 @@ functions:
       - http:
           path: trips/{trip_id}
           method: delete
+          cors: true
+
+  uploadProfilePhoto:
+    handler: handlers/uploads.upload_profile_photo
+    events:
+      - http:
+          path: uploads/profile-photo
+          method: post
+          cors: true
+
+  uploadTripPhoto:
+    handler: handlers/uploads.upload_trip_photo
+    events:
+      - http:
+          path: uploads/trip-photo
+          method: post
+          cors: true
+
+  uploadPoiImage:
+    handler: handlers/uploads.upload_poi_image
+    events:
+      - http:
+          path: uploads/poi-image
+          method: post
+          cors: true
+
+  uploadItineraryPdf:
+    handler: handlers/uploads.upload_itinerary_pdf
+    events:
+      - http:
+          path: uploads/itinerary-pdf
+          method: post
+          cors: true
+
+  deleteUpload:
+    handler: handlers/uploads.delete_upload
+    events:
+      - http:
+          path: uploads
+          method: delete
+          cors: true
+
+  getProfile:
+    handler: handlers/profile.get_profile
+    events:
+      - http:
+          path: profile
+          method: get
+          cors: true
+
+  updateProfile:
+    handler: handlers/profile.update_profile
+    events:
+      - http:
+          path: profile
+          method: put
+          cors: true
+
+  getSettings:
+    handler: handlers/profile.get_settings
+    events:
+      - http:
+          path: settings
+          method: get
+          cors: true
+
+  updateSettings:
+    handler: handlers/profile.update_settings
+    events:
+      - http:
+          path: settings
+          method: put
+          cors: true
+
+  addPoiToItinerary:
+    handler: handlers/itinerary.add_poi_to_itinerary
+    events:
+      - http:
+          path: trips/{trip_id}/itinerary/pois
+          method: post
+          cors: true
+
+  removePoiFromItinerary:
+    handler: handlers/itinerary.remove_poi_from_itinerary
+    events:
+      - http:
+          path: trips/{trip_id}/itinerary/pois/{poi_id}
+          method: delete
+          cors: true
+
+  updatePoiInItinerary:
+    handler: handlers/itinerary.update_poi_in_itinerary
+    events:
+      - http:
+          path: trips/{trip_id}/itinerary/pois/{poi_id}
+          method: put
+          cors: true
+
+  reorderItinerary:
+    handler: handlers/itinerary.reorder_itinerary
+    events:
+      - http:
+          path: trips/{trip_id}/itinerary/reorder
+          method: post
+          cors: true
+
+  getTripRecommendations:
+    handler: handlers/trip_planning.get_trip_recommendations
+    events:
+      - http:
+          path: trips/{trip_id}/recommendations
+          method: get
+          cors: true
+
+  calculateTripCosts:
+    handler: handlers/trip_planning.calculate_trip_costs
+    events:
+      - http:
+          path: trips/{trip_id}/costs
+          method: get
           cors: true
 
 plugins:

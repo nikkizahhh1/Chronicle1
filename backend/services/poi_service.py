@@ -32,8 +32,8 @@ def get_pois_for_preferences(
             print(f"Error querying {category}: {e}")
             continue
     
-    # Sort by popularity (reddit mentions)
-    all_pois.sort(key=lambda x: x.get('reddit_mentions', 0), reverse=True)
+    # Sort by popularity (Yelp reviews, fallback to reddit mentions for old data)
+    all_pois.sort(key=lambda x: x.get('yelp_reviews', x.get('reddit_mentions', 0)), reverse=True)
     
     return all_pois
 

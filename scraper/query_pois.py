@@ -36,7 +36,7 @@ def query_pois_for_itinerary(
         
         all_pois.extend(response['Items'])
     
-    all_pois.sort(key=lambda x: x.get('reddit_mentions', 0), reverse=True)
+    all_pois.sort(key=lambda x: x.get('yelp_reviews', x.get('reddit_mentions', 0)), reverse=True)
     
     return all_pois
 

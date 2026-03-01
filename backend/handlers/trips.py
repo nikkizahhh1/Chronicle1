@@ -13,7 +13,7 @@ from boto3.dynamodb.conditions import Key
 trips_table = get_dynamodb_table('trips')
 
 def create_trip(event, context):
-    """Create a new trip"""
+    """Create a new trip with detailed questionnaire data"""
     try:
         token = event['headers'].get('Authorization', '').replace('Bearer ', '')
         user_data = verify_token(token)
@@ -23,11 +23,36 @@ def create_trip(event, context):
         body = json.loads(event['body'])
         
         trip_id = str(uuid.uuid4())
+        
+        # Extract questionnaire data
+        questionnaire = body.get('questionnaire', {})
+        
         trip = {
             'trip_id': trip_id,
             'user_id': user_data['user_id'],
             'type': body.get('type', 'location'),  # location or roadtrip
             'destination': body.get('destination'),
+            
+            # Questionnaire fields from frontend
+            'questionnaire': {
+                # Required fields
+                'starting_point': questionnaire.get('starting_point'),
+                'ending_point': questionnaire.get('ending_point'),
+                'duration_days': questionnaire.get('duration_days'),
+                'budget': questionnaire.get('budget'),
+                'how_busy': questionnaire.get('how_busy'),  # Slider value (e.g., 1-5)
+                'traveling_with': questionnaire.get('traveling_with'),  # "solo" or "group"
+                
+                # Road trip preferences (optional)
+                'road_trip_preferences': {
+                    'include_gas_costs': questionnaire.get('road_trip_preferences', {}).get('include_gas_costs', False),
+                    'scenic_route': questionnaire.get('road_trip_preferences', {}).get('scenic_route', False)
+                },
+                
+                # Optional: Activity categories from quiz
+                'activity_categories': questionnaire.get('activity_categories', []),
+            },
+            
             'preferences': body.get('preferences', {}),
             'status': 'pending',
             'itinerary': {},
