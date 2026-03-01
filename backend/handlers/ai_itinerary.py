@@ -1,57 +1,85 @@
+"""
+Backend handler that calls the deployed AI layer API
+This replaces the old ai_itinerary.py that tried to call Bedrock directly
+"""
 import json
 import sys
 import os
+import requests
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from services.claude_service import ClaudeService
-from services.prompt_builder import PromptBuilder
-from services.itinerary_parser import ItineraryParser
 from utils.response import success_response, error_response
 from utils.auth_utils import extract_user_id
 
-claude_service = ClaudeService()
-prompt_builder = PromptBuilder()
-parser = ItineraryParser()
+# Your deployed AI layer endpoint
+AI_LAYER_URL = os.environ.get(
+    'AI_LAYER_URL',
+    'https://ksalbazufb.execute-api.us-east-1.amazonaws.com/dev/ai/itinerary/generate'
+)
 
 def generate(event, context):
+    """
+    Generate itinerary by calling the AI layer API
+    """
     try:
-        # For testing: accept any token or no token
+        # Extract user ID from JWT
         user_id = extract_user_id(event)
         if not user_id:
-            # Use test user for hackathon testing
-            user_id = 'test-user-123'
+            return error_response('Unauthorized', 401)
         
+        # Parse request body
         body = json.loads(event.get('body', '{}'))
         
+        # Validate required fields
         trip_type = body.get('trip_type')
         if trip_type not in ['location', 'roadtrip']:
             return error_response('Invalid trip_type. Must be "location" or "roadtrip"')
         
-        system_prompt = prompt_builder.build_system_prompt()
+        if trip_type == 'location' and not body.get('destination'):
+            return error_response('destination is required for location trips')
         
-        if trip_type == 'location':
-            if not body.get('destination'):
-                return error_response('destination is required for location trips')
-            user_prompt = prompt_builder.build_location_trip_prompt(body)
-        else:
+        if trip_type == 'roadtrip':
             if not body.get('start_location') or not body.get('end_location'):
                 return error_response('start_location and end_location are required for roadtrips')
-            user_prompt = prompt_builder.build_roadtrip_prompt(body)
         
-        claude_response = claude_service.generate_itinerary(system_prompt, user_prompt)
+        # Call AI layer API
+        print(f"Calling AI layer for user {user_id}")
         
-        itinerary = parser.parse(claude_response)
+        ai_response = requests.post(
+            AI_LAYER_URL,
+            json=body,
+            headers={'Content-Type': 'application/json'},
+            timeout=60
+        )
         
-        result = {
+        if ai_response.status_code != 200:
+            error_msg = ai_response.json().get('error', 'AI layer request failed')
+            return error_response(f'AI generation failed: {error_msg}', 500)
+        
+        # Get itinerary from AI layer
+        ai_data = ai_response.json()
+        
+        if not ai_data.get('success'):
+            return error_response(ai_data.get('error', 'Unknown error'), 500)
+        
+        itinerary_data = ai_data['data']
+        
+        # TODO: Save to DynamoDB here
+        # save_itinerary_to_db(user_id, itinerary_data)
+        
+        # Return itinerary to frontend
+        return success_response({
             'user_id': user_id,
-            'trip_type': trip_type,
-            'itinerary': itinerary,
-            'raw_response': claude_response
-        }
+            'itinerary': itinerary_data['itinerary'],
+            'trip_type': itinerary_data['trip_type']
+        })
         
-        return success_response(result)
-        
+    except requests.exceptions.Timeout:
+        return error_response('AI generation timed out. Please try again.', 504)
+    except requests.exceptions.RequestException as e:
+        print(f"Error calling AI layer: {str(e)}")
+        return error_response(f'Failed to connect to AI service: {str(e)}', 500)
     except Exception as e:
         print(f"Error generating itinerary: {str(e)}")
         return error_response(f'Failed to generate itinerary: {str(e)}', 500)

@@ -1,156 +1,108 @@
+"""
+Trip planning handler that integrates quiz results + Reddit scraper + AI layer
+"""
 import json
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import requests
 
-from utils.dynamodb import get_dynamodb_table
-from utils.auth_utils import verify_token
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
 from utils.response import success_response, error_response
-from services.trip_calculator import (
-    calculate_trip_budget,
-    get_scenic_route_guidance,
-    adjust_pois_for_busy_level,
-    calculate_group_adjustments
+from utils.auth_utils import extract_user_id
+
+AI_LAYER_URL = os.environ.get(
+    'AI_LAYER_URL',
+    'https://ksalbazufb.execute-api.us-east-1.amazonaws.com/dev/ai/itinerary/generate'
 )
 
-trips_table = get_dynamodb_table('trips')
-
-def get_trip_recommendations(event, context):
+def create_trip_from_quiz(event, context):
     """
-    Get trip planning recommendations based on questionnaire
-    This endpoint helps the AI team understand how to plan the trip
+    Complete flow: Quiz answers → Reddit scraper → AI layer → Save trip
     """
     try:
-        token = event['headers'].get('Authorization', '').replace('Bearer ', '')
-        user_data = verify_token(token)
-        if not user_data:
-            return error_response(401, "Unauthorized")
+        user_id = extract_user_id(event)
+        if not user_id:
+            return error_response('Unauthorized', 401)
         
-        trip_id = event['pathParameters']['trip_id']
+        body = json.loads(event.get('body', '{}'))
         
-        # Get trip
-        response = trips_table.get_item(Key={'trip_id': trip_id})
-        if 'Item' not in response:
-            return error_response(404, "Trip not found")
+        # Extract quiz answers
+        destination = body.get('destination')
+        duration = body.get('duration', 3)
+        budget = body.get('budget', 'moderate')
+        intensity = body.get('intensity', 5)
+        group_type = body.get('group_type', 'solo')
+        interests = body.get('interests', [])
+        activity_preferences = body.get('activity_preferences', [])
         
-        trip = response['Item']
+        if not destination:
+            return error_response('destination is required')
         
-        # Verify ownership
-        if trip['user_id'] != user_data['user_id']:
-            return error_response(403, "Forbidden")
+        # TODO: Call Reddit scraper to get local spots
+        # For now, using empty list - your scraper friend will implement this
+        recommended_places = []
         
-        questionnaire = trip.get('questionnaire', {})
+        # Example of what scraper should return:
+        # recommended_places = reddit_scraper.get_spots(
+        #     city=destination,
+        #     interests=interests
+        # )
         
-        # Extract questionnaire data
-        duration_days = questionnaire.get('duration_days', 3)
-        budget = questionnaire.get('budget', 1000)
-        how_busy = questionnaire.get('how_busy', 3)
-        traveling_with = questionnaire.get('traveling_with', 'solo')
-        road_trip_prefs = questionnaire.get('road_trip_preferences', {})
-        include_gas = road_trip_prefs.get('include_gas_costs', False)
-        scenic_route = road_trip_prefs.get('scenic_route', False)
-        
-        # Calculate POI recommendations based on busy level
-        poi_recommendations = adjust_pois_for_busy_level([], how_busy, duration_days)
-        
-        # Calculate group adjustments
-        group_adjustments = calculate_group_adjustments(
-            traveling_with,
-            budget,
-            poi_recommendations['pois_per_day']
-        )
-        
-        # Get scenic route guidance if requested
-        scenic_guidance = None
-        if scenic_route:
-            scenic_guidance = get_scenic_route_guidance()
-        
-        # Build recommendations
-        recommendations = {
-            'trip_id': trip_id,
-            'duration_days': duration_days,
+        # Build request for AI layer
+        ai_request = {
+            'trip_type': 'location',
+            'destination': destination,
+            'duration': duration,
             'budget': budget,
-            'how_busy': how_busy,
-            'traveling_with': traveling_with,
-            
-            # POI recommendations
-            'poi_planning': {
-                'pois_per_day': group_adjustments['adjusted_pois_per_day'],
-                'total_pois_needed': group_adjustments['adjusted_pois_per_day'] * duration_days,
-                'recommended_duration_per_poi_minutes': poi_recommendations['recommended_duration_per_poi_minutes'],
-                'time_multiplier': group_adjustments['time_multiplier']
-            },
-            
-            # Budget planning
-            'budget_planning': {
-                'include_gas_costs': include_gas,
-                'adjusted_budget': group_adjustments['adjusted_budget'],
-                'budget_per_day': group_adjustments['adjusted_budget'] / duration_days,
-                'notes': 'Gas costs will be calculated after route is determined' if include_gas else None
-            },
-            
-            # Scenic route guidance
-            'scenic_route': scenic_guidance if scenic_route else None,
-            
-            # Group travel adjustments
-            'group_adjustments': group_adjustments if traveling_with == 'group' else None,
-            
-            # General recommendations
-            'recommendations': [
-                f"Plan for {group_adjustments['adjusted_pois_per_day']} POIs per day",
-                f"Allocate approximately ${round(group_adjustments['adjusted_budget'] / duration_days, 2)} per day",
-                f"Each POI should take about {poi_recommendations['recommended_duration_per_poi_minutes']} minutes"
-            ] + (group_adjustments['recommendations'] if traveling_with == 'group' else [])
+            'intensity': intensity,
+            'group_type': group_type,
+            'interests': interests,
+            'activity_preferences': activity_preferences,
+            'recommended_places': recommended_places  # From Reddit scraper
         }
         
-        return success_response(recommendations)
+        print(f"Generating itinerary for {destination} with {len(recommended_places)} recommended places")
         
-    except Exception as e:
-        return error_response(500, str(e))
-
-def calculate_trip_costs(event, context):
-    """
-    Calculate trip costs including gas (if applicable)
-    Call this after itinerary is generated to get accurate costs
-    """
-    try:
-        token = event['headers'].get('Authorization', '').replace('Bearer ', '')
-        user_data = verify_token(token)
-        if not user_data:
-            return error_response(401, "Unauthorized")
-        
-        trip_id = event['pathParameters']['trip_id']
-        
-        # Get trip
-        response = trips_table.get_item(Key={'trip_id': trip_id})
-        if 'Item' not in response:
-            return error_response(404, "Trip not found")
-        
-        trip = response['Item']
-        
-        # Verify ownership
-        if trip['user_id'] != user_data['user_id']:
-            return error_response(403, "Forbidden")
-        
-        questionnaire = trip.get('questionnaire', {})
-        itinerary = trip.get('itinerary', {})
-        
-        if not itinerary or not itinerary.get('days'):
-            return error_response(400, "Trip must have an itinerary to calculate costs")
-        
-        # Extract data
-        budget = questionnaire.get('budget', 1000)
-        road_trip_prefs = questionnaire.get('road_trip_preferences', {})
-        include_gas = road_trip_prefs.get('include_gas_costs', False)
-        
-        # Calculate budget breakdown
-        budget_breakdown = calculate_trip_budget(
-            itinerary,
-            budget,
-            include_gas=include_gas
+        # Call AI layer
+        ai_response = requests.post(
+            AI_LAYER_URL,
+            json=ai_request,
+            headers={'Content-Type': 'application/json'},
+            timeout=60
         )
         
-        return success_response(budget_breakdown)
+        if ai_response.status_code != 200:
+            error_msg = ai_response.json().get('error', 'AI layer request failed')
+            return error_response(f'AI generation failed: {error_msg}', 500)
         
+        ai_data = ai_response.json()
+        
+        if not ai_data.get('success'):
+            return error_response(ai_data.get('error', 'Unknown error'), 500)
+        
+        itinerary = ai_data['data']['itinerary']
+        
+        # TODO: Save to DynamoDB
+        # trip_id = save_trip_to_db(user_id, {
+        #     'destination': destination,
+        #     'itinerary': itinerary,
+        #     'quiz_answers': body,
+        #     'created_at': datetime.now().isoformat()
+        # })
+        
+        return success_response({
+            'message': 'Trip created successfully',
+            'user_id': user_id,
+            'destination': destination,
+            'itinerary': itinerary
+        })
+        
+    except requests.exceptions.Timeout:
+        return error_response('AI generation timed out. Please try again.', 504)
+    except requests.exceptions.RequestException as e:
+        print(f"Error calling AI layer: {str(e)}")
+        return error_response(f'Failed to connect to AI service: {str(e)}', 500)
     except Exception as e:
-        return error_response(500, str(e))
+        print(f"Error in trip planning: {str(e)}")
+        return error_response(f'Failed to create trip: {str(e)}', 500)
