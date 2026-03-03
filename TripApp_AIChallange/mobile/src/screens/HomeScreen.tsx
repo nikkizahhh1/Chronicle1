@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,41 +11,99 @@ import {
   Alert,
   Modal,
   TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { api } from '../services/api';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
-// Mock data - will be replaced with real data from backend
-const MOCK_TRIPS = [
-  {
-    id: '1',
-    title: 'New York City Getaway',
-    location: 'New York, NY',
-    dates: 'Mar 15-18, 2026',
-    budget: '$450 budget',
-    image: require('../../assets/images/trip-placeholder.png'),
-    status: 'Upcoming',
-  },
-  {
-    id: '2',
-    title: 'Desert Canyon Adventure',
-    location: 'Arizona & Utah',
-    dates: 'Apr 22-25, 2026',
-    budget: '$380 budget',
-    image: require('../../assets/images/trip-placeholder.png'),
-    status: 'Upcoming',
-  },
-];
+interface Trip {
+  id: string;
+  title: string;
+  location: string;
+  dates: string;
+  budget: string;
+  image: any;
+  status: string;
+}
 
 export default function HomeScreen({ navigation }: Props) {
+  const [trips, setTrips] = useState<Trip[]>([]);
+  const [loading, setLoading] = useState(true);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
   const [startDateText, setStartDateText] = useState('Mar 15, 2026');
   const [endDateText, setEndDateText] = useState('Mar 18, 2026');
+
+  useEffect(() => {
+    fetchTrips();
+  }, []);
+
+  const fetchTrips = async () => {
+    try {
+      setLoading(true);
+      const response = await api.get('/trips');
+      
+      if (response.success && response.data) {
+        // Transform backend data to UI format
+        const formattedTrips = response.data.map((trip: any) => ({
+          id: trip.trip_id,
+          title: trip.title || trip.destination || 'Untitled Trip',
+          location: trip.destination || trip.location || 'Unknown',
+          dates: formatDates(trip.start_date, trip.end_date),
+          budget: `$${trip.budget || 0} budget`,
+          image: require('../../assets/images/trip-placeholder.png'),
+          status: getStatus(trip.start_date),
+        }));
+        setTrips(formattedTrips);
+      }
+    } catch (error) {
+      console.error('Error fetching trips:', error);
+      Alert.alert('Error', 'Failed to load trips. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatDates = (startDate: string, endDate: string) => {
+    if (!startDate || !endDate) return 'Dates TBD';
+    
+    try {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const startMonth = start.toLocaleDateString('en-US', { month: 'short' });
+      const endMonth = end.toLocaleDateString('en-US', { month: 'short' });
+      const startDay = start.getDate();
+      const endDay = end.getDate();
+      const year = start.getFullYear();
+      
+      if (startMonth === endMonth) {
+        return `${startMonth} ${startDay}-${endDay}, ${year}`;
+      }
+      return `${startMonth} ${startDay} - ${endMonth} ${endDay}, ${year}`;
+    } catch {
+      return 'Dates TBD';
+    }
+  };
+
+  const getStatus = (startDate: string) => {
+    if (!startDate) return 'Planning';
+    
+    try {
+      const start = new Date(startDate);
+      const now = new Date();
+      
+      if (start > now) return 'Upcoming';
+      if (start < now) return 'Past';
+      return 'In Progress';
+    } catch {
+      return 'Planning';
+    }
+  };
 
   const handleMenuToggle = (tripId: string, event: any) => {
     event.stopPropagation();
@@ -63,13 +121,20 @@ export default function HomeScreen({ navigation }: Props) {
     setShowDatePicker(true);
   };
 
-  const handleSaveDates = () => {
-    setShowDatePicker(false);
-    Alert.alert(
-      'Dates Updated',
-      `Trip dates changed to ${startDateText} - ${endDateText}`
-    );
-    // TODO: Update dates in backend
+  const handleSaveDates = async () => {
+    if (!selectedTripId) return;
+    
+    try {
+      // TODO: Parse dates and update backend
+      setShowDatePicker(false);
+      Alert.alert(
+        'Dates Updated',
+        `Trip dates changed to ${startDateText} - ${endDateText}`
+      );
+      fetchTrips(); // Refresh trips
+    } catch (error) {
+      Alert.alert('Error', 'Failed to update dates');
+    }
   };
 
   const handleCancelDatePicker = () => {
@@ -92,9 +157,18 @@ export default function HomeScreen({ navigation }: Props) {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {
-            // TODO: Delete trip from backend
-            Alert.alert('Trip Deleted', 'Your trip has been deleted.');
+          onPress: async () => {
+            try {
+              const response = await api.delete(`/trips/${tripId}`);
+              if (response.success) {
+                Alert.alert('Trip Deleted', 'Your trip has been deleted.');
+                fetchTrips(); // Refresh trips
+              } else {
+                Alert.alert('Error', response.error || 'Failed to delete trip');
+              }
+            } catch (error) {
+              Alert.alert('Error', 'Failed to delete trip');
+            }
           },
         },
       ]
@@ -164,7 +238,20 @@ export default function HomeScreen({ navigation }: Props) {
           </TouchableOpacity>
 
           {/* Trip Cards */}
-          {MOCK_TRIPS.map((trip) => (
+          {loading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#1F3D2B" />
+              <Text style={styles.loadingText}>Loading your trips...</Text>
+            </View>
+          ) : trips.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>No trips yet!</Text>
+              <Text style={styles.emptySubtext}>
+                Start planning your next adventure
+              </Text>
+            </View>
+          ) : (
+            trips.map((trip) => (
             <TouchableOpacity
               key={trip.id}
               style={styles.tripCard}
@@ -266,7 +353,8 @@ export default function HomeScreen({ navigation }: Props) {
                 </View>
               </View>
             </TouchableOpacity>
-          ))}
+          ))
+          )}
         </View>
 
         {/* Hidden Gem Score */}
@@ -621,5 +709,28 @@ const styles = StyleSheet.create({
     color: '#1F3D2B',
     borderWidth: 1,
     borderColor: '#E5E5E5',
+  },
+  loadingContainer: {
+    paddingVertical: 40,
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#666',
+  },
+  emptyContainer: {
+    paddingVertical: 40,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1F3D2B',
+    marginBottom: 8,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: '#666',
   },
 });

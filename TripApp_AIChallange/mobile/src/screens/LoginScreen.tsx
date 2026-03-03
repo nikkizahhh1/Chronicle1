@@ -21,10 +21,12 @@ export default function LoginScreen({ navigation }: Props) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showVerificationPrompt, setShowVerificationPrompt] = useState(false);
 
   const handleSubmit = async () => {
     setError('');
     setLoading(true);
+    setShowVerificationPrompt(false);
 
     try {
       const response = await authService.login({ email, password });
@@ -33,10 +35,10 @@ export default function LoginScreen({ navigation }: Props) {
         // Login successful, navigate to home
         navigation.navigate('Home');
       } else {
-        // TEMPORARY: If backend not configured, skip to home for testing
-        if (response.error?.includes('Backend not configured')) {
-          // Allow testing without backend
-          navigation.navigate('Home');
+        // Check if user needs to verify email
+        if (response.error?.includes('not verified') || response.error?.includes('UserNotConfirmedException')) {
+          setError('Your email is not verified yet.');
+          setShowVerificationPrompt(true);
         } else {
           // Show error message from API
           setError(response.error || 'Login failed');
@@ -44,6 +46,26 @@ export default function LoginScreen({ navigation }: Props) {
       }
     } catch (err) {
       setError('An unexpected error occurred');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    setLoading(true);
+    setError('');
+    
+    try {
+      const response = await authService.resendCode({ email });
+      if (response.success) {
+        setError('');
+        // Navigate to signup screen in verification mode
+        navigation.navigate('Signup');
+      } else {
+        setError(response.error || 'Failed to resend code');
+      }
+    } catch (err) {
+      setError('Failed to resend verification code');
     } finally {
       setLoading(false);
     }
@@ -102,6 +124,19 @@ export default function LoginScreen({ navigation }: Props) {
             </View>
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
+
+            {showVerificationPrompt && (
+              <TouchableOpacity
+                style={styles.verificationPrompt}
+                onPress={handleResendCode}
+                disabled={loading}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.verificationPromptText}>
+                  📧 Resend Verification Code
+                </Text>
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               style={[
@@ -242,5 +277,20 @@ const styles = StyleSheet.create({
   backButtonText: {
     fontSize: 14,
     color: '#666',
+  },
+  verificationPrompt: {
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+  },
+  verificationPromptText: {
+    color: '#92400E',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });

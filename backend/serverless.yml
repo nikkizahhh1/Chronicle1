@@ -2,15 +2,14 @@ service: travel-assistant-backend
 
 provider:
   name: aws
-  runtime: python3.9
+  runtime: python3.12
   region: us-east-1
   environment:
     JWT_SECRET: ${env:JWT_SECRET}
     COGNITO_USER_POOL_ID: ${env:COGNITO_USER_POOL_ID}
     COGNITO_CLIENT_ID: ${env:COGNITO_CLIENT_ID}
     S3_BUCKET_NAME: ${env:S3_BUCKET_NAME}
-    BEDROCK_MODEL_ID: ${env:BEDROCK_MODEL_ID, 'anthropic.claude-sonnet-4-6-20260217-v1:0'}
-    AWS_REGION: ${self:provider.region}
+    BEDROCK_MODEL_ID: ${env:BEDROCK_MODEL_ID, 'anthropic.claude-3-5-sonnet-20241022-v2:0'}
     LOCATION_MAP_NAME: ${env:LOCATION_MAP_NAME, 'TripMapView'}
     LOCATION_PLACE_INDEX_NAME: ${env:LOCATION_PLACE_INDEX_NAME, 'TripPlaceIndex'}
   iam:
@@ -282,8 +281,16 @@ functions:
           method: post
           cors: true
 
-plugins:
-  - serverless-python-requirements
+  searchPlaces:
+    handler: handlers/location.search_places
+    events:
+      - http:
+          path: location/search
+          method: get
+          cors: true
+
+custom:
+  pythonRequirements: {}
 
 resources:
   Resources:

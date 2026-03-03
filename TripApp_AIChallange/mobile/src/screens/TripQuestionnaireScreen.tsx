@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,14 +9,26 @@ import {
   Image,
   ActivityIndicator,
   Alert,
+  Modal,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types';
 import Slider from '@react-native-community/slider';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api } from '../services/api';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TripQuestionnaire'>;
+
+interface LocationSuggestion {
+  label: string;
+  fullLabel: string;
+  coordinates: number[];
+  city: string;
+  state: string;
+  country: string;
+}
+
 
 const getIntensityLabel = (level: number): string => {
   const labels = {
@@ -47,8 +59,8 @@ export default function TripQuestionnaireScreen({ navigation, route }: Props) {
   const [startingPoint, setStartingPoint] = useState('');
   const [endingPoint, setEndingPoint] = useState('');
   const [duration, setDuration] = useState('3');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const [startDate, setStartDate] = useState(new Date());
+  const [endDate, setEndDate] = useState(new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)); // 3 days later
   const [budget, setBudget] = useState('500');
   const [intensity, setIntensity] = useState(3); // 1-5 scale
   const [travelWith, setTravelWith] = useState<'solo' | 'group'>('solo');
@@ -56,6 +68,121 @@ export default function TripQuestionnaireScreen({ navigation, route }: Props) {
   const [scenicRoute, setScenicRoute] = useState(true);
   const [includeTransport, setIncludeTransport] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Autocomplete states
+  const [showDestinationSuggestions, setShowDestinationSuggestions] = useState(false);
+  const [showStartSuggestions, setShowStartSuggestions] = useState(false);
+  const [showEndSuggestions, setShowEndSuggestions] = useState(false);
+  const [destinationSuggestions, setDestinationSuggestions] = useState<LocationSuggestion[]>([]);
+  const [startSuggestions, setStartSuggestions] = useState<LocationSuggestion[]>([]);
+  const [endSuggestions, setEndSuggestions] = useState<LocationSuggestion[]>([]);
+  const [searchingLocations, setSearchingLocations] = useState(false);
+
+  // Date picker states
+  const [showStartDatePicker, setShowStartDatePicker] = useState(false);
+  const [showEndDatePicker, setShowEndDatePicker] = useState(false);
+
+  // Debounce timer for location search
+  let searchTimer: NodeJS.Timeout | null = null;
+
+  // Search locations using AWS Location Service
+  const searchLocations = async (query: string): Promise<LocationSuggestion[]> => {
+    if (query.length < 2) return [];
+    
+    try {
+      setSearchingLocations(true);
+      const response = await api.get(`/location/search?query=${encodeURIComponent(query)}&maxResults=10`);
+      if (response.success && response.data) {
+        return response.data;
+      }
+      return [];
+    } catch (error) {
+      console.error('Error searching locations:', error);
+      return [];
+    } finally {
+      setSearchingLocations(false);
+    }
+  };
+
+  const handleDestinationChange = (text: string) => {
+    setDestination(text);
+    setShowDestinationSuggestions(true);
+    
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(async () => {
+      const results = await searchLocations(text);
+      setDestinationSuggestions(results);
+    }, 300);
+  };
+
+  const handleStartingPointChange = (text: string) => {
+    setStartingPoint(text);
+    setShowStartSuggestions(true);
+    
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(async () => {
+      const results = await searchLocations(text);
+      setStartSuggestions(results);
+    }, 300);
+  };
+
+  const handleEndingPointChange = (text: string) => {
+    setEndingPoint(text);
+    setShowEndSuggestions(true);
+    
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(async () => {
+      const results = await searchLocations(text);
+      setEndSuggestions(results);
+    }, 300);
+  };
+
+  const selectDestination = (location: LocationSuggestion) => {
+    setDestination(location.label);
+    setShowDestinationSuggestions(false);
+  };
+
+  const selectStartingPoint = (location: LocationSuggestion) => {
+    setStartingPoint(location.label);
+    setShowStartSuggestions(false);
+  };
+
+  const selectEndingPoint = (location: LocationSuggestion) => {
+    setEndingPoint(location.label);
+    setShowEndSuggestions(false);
+  };
+
+  const formatDate = (date: Date): string => {
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+
+  const onStartDateChange = (event: any, selectedDate?: Date) => {
+    setShowStartDatePicker(false);
+    if (selectedDate) {
+      setStartDate(selectedDate);
+      // Auto-update end date if it's before start date
+      if (selectedDate > endDate) {
+        const newEndDate = new Date(selectedDate);
+        newEndDate.setDate(newEndDate.getDate() + parseInt(duration) || 3);
+        setEndDate(newEndDate);
+      }
+    }
+  };
+
+  const onEndDateChange = (event: any, selectedDate?: Date) => {
+    setShowEndDatePicker(false);
+    if (selectedDate) {
+      setEndDate(selectedDate);
+      // Calculate duration
+      const diffTime = Math.abs(selectedDate.getTime() - startDate.getTime());
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      setDuration(diffDays.toString());
+    }
+  };
 
   const handleGenerateTrip = async () => {
     // Validation
@@ -78,10 +205,10 @@ export default function TripQuestionnaireScreen({ navigation, route }: Props) {
       // Build request payload
       const payload: any = {
         trip_type: type,
-        duration: parseInt(duration),
-        start_date: startDate,
-        end_date: endDate,
-        budget: budget,
+        duration: parseInt(duration) || 3,
+        start_date: startDate.toISOString().split('T')[0], // Format: YYYY-MM-DD
+        end_date: endDate.toISOString().split('T')[0],
+        budget: parseInt(budget) || 500,
         intensity: intensity, // 1-5 scale as per PDF requirements
         group_type: travelWith,
         interests: interests, // Include quiz results for personalization
@@ -97,24 +224,35 @@ export default function TripQuestionnaireScreen({ navigation, route }: Props) {
         payload.scenic_route = scenicRoute;
       }
 
-      // Call AI backend
+      console.log('Generating trip with payload:', payload);
+
+      // Call AI backend to generate itinerary
       const response = await api.post('/ai/itinerary/generate', payload);
 
       if (response.success && response.data) {
-        // Generate a trip ID
-        const tripId = `trip-${Date.now()}`;
-
-        // Navigate to preview with generated itinerary
+        // Backend returns trip_id and full trip data
+        const tripId = response.data.trip_id;
+        
+        console.log('Trip generated successfully:', tripId);
+        
+        // Navigate to preview with the real trip ID
         navigation.navigate('TripPreview', { tripId });
       } else {
-        // Demo mode - use mock data
-        const tripId = `trip-demo-${Date.now()}`;
-        navigation.navigate('TripPreview', { tripId });
+        // Show error
+        Alert.alert(
+          'Generation Failed', 
+          response.error || 'Failed to generate trip. Please try again.',
+          [
+            { text: 'OK', onPress: () => {} }
+          ]
+        );
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to generate trip. Using demo data instead.');
-      const tripId = `trip-demo-${Date.now()}`;
-      navigation.navigate('TripPreview', { tripId });
+      console.error('Error generating trip:', error);
+      Alert.alert(
+        'Error', 
+        'Failed to generate trip. Please check your connection and try again.'
+      );
     } finally {
       setLoading(false);
     }
@@ -151,10 +289,36 @@ export default function TripQuestionnaireScreen({ navigation, route }: Props) {
               <TextInput
                 style={styles.input}
                 value={destination}
-                onChangeText={setDestination}
-                placeholder="Where do you want to go?"
+                onChangeText={handleDestinationChange}
+                placeholder="e.g., New York City, NY"
                 placeholderTextColor="#999"
+                onFocus={() => {
+                  if (destination.length >= 2) {
+                    setShowDestinationSuggestions(true);
+                  }
+                }}
               />
+              {showDestinationSuggestions && destinationSuggestions.length > 0 && (
+                <View style={styles.suggestionsContainer}>
+                  <View style={styles.suggestionsList}>
+                    {destinationSuggestions.map((item) => (
+                      <TouchableOpacity
+                        key={item.fullLabel}
+                        style={styles.suggestionItem}
+                        onPress={() => selectDestination(item)}
+                      >
+                        <Image
+                          source={require('../../assets/images/location-pin-icon.png')}
+                          style={styles.suggestionIcon}
+                          resizeMode="contain"
+                        />
+                        <Text style={styles.suggestionText}>{item.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              )}
+              <Text style={styles.helperText}>Select from popular destinations or type your own</Text>
             </View>
           )}
 
@@ -173,10 +337,35 @@ export default function TripQuestionnaireScreen({ navigation, route }: Props) {
                 <TextInput
                   style={styles.input}
                   value={startingPoint}
-                  onChangeText={setStartingPoint}
-                  placeholder="Where will you start?"
+                  onChangeText={handleStartingPointChange}
+                  placeholder="e.g., San Francisco, CA"
                   placeholderTextColor="#999"
+                  onFocus={() => {
+                    if (startingPoint.length >= 2) {
+                      setShowStartSuggestions(true);
+                    }
+                  }}
                 />
+                {showStartSuggestions && startSuggestions.length > 0 && (
+                  <View style={styles.suggestionsContainer}>
+                    <View style={styles.suggestionsList}>
+                      {startSuggestions.map((item) => (
+                        <TouchableOpacity
+                          key={item.fullLabel}
+                          style={styles.suggestionItem}
+                          onPress={() => selectStartingPoint(item)}
+                        >
+                          <Image
+                            source={require('../../assets/images/location-pin-icon.png')}
+                            style={styles.suggestionIcon}
+                            resizeMode="contain"
+                          />
+                          <Text style={styles.suggestionText}>{item.label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                )}
               </View>
 
               <View style={styles.card}>
@@ -191,10 +380,35 @@ export default function TripQuestionnaireScreen({ navigation, route }: Props) {
                 <TextInput
                   style={styles.input}
                   value={endingPoint}
-                  onChangeText={setEndingPoint}
-                  placeholder="Where will you end?"
+                  onChangeText={handleEndingPointChange}
+                  placeholder="e.g., Los Angeles, CA"
                   placeholderTextColor="#999"
+                  onFocus={() => {
+                    if (endingPoint.length >= 2) {
+                      setShowEndSuggestions(true);
+                    }
+                  }}
                 />
+                {showEndSuggestions && endSuggestions.length > 0 && (
+                  <View style={styles.suggestionsContainer}>
+                    <View style={styles.suggestionsList}>
+                      {endSuggestions.map((item) => (
+                        <TouchableOpacity
+                          key={item.fullLabel}
+                          style={styles.suggestionItem}
+                          onPress={() => selectEndingPoint(item)}
+                        >
+                          <Image
+                            source={require('../../assets/images/location-pin-icon.png')}
+                            style={styles.suggestionIcon}
+                            resizeMode="contain"
+                          />
+                          <Text style={styles.suggestionText}>{item.label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                )}
               </View>
             </>
           )}
@@ -216,23 +430,68 @@ export default function TripQuestionnaireScreen({ navigation, route }: Props) {
           {/* Trip Dates */}
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Trip Dates</Text>
+            
             <Text style={styles.label}>Start Date</Text>
-            <TextInput
-              style={styles.input}
-              value={startDate}
-              onChangeText={setStartDate}
-              placeholder="e.g., Mar 15, 2026"
-              placeholderTextColor="#999"
-            />
+            <TouchableOpacity
+              style={styles.dateButton}
+              onPress={() => {
+                setShowStartDatePicker(!showStartDatePicker);
+                setShowEndDatePicker(false);
+              }}
+            >
+              <Image
+                source={require('../../assets/images/calendar-icon.png')}
+                style={styles.dateIcon}
+                resizeMode="contain"
+              />
+              <Text style={styles.dateText}>{formatDate(startDate)}</Text>
+            </TouchableOpacity>
+            
+            {showStartDatePicker && (
+              <View style={styles.datePickerDropdown}>
+                <DateTimePicker
+                  value={startDate}
+                  mode="date"
+                  display="inline"
+                  onChange={onStartDateChange}
+                  minimumDate={new Date()}
+                  style={styles.inlineDatePicker}
+                />
+              </View>
+            )}
+
             <Text style={styles.label}>End Date</Text>
-            <TextInput
-              style={styles.input}
-              value={endDate}
-              onChangeText={setEndDate}
-              placeholder="e.g., Mar 18, 2026"
-              placeholderTextColor="#999"
-            />
-            <Text style={styles.helperText}>When do you plan to travel?</Text>
+            <TouchableOpacity
+              style={styles.dateButton}
+              onPress={() => {
+                setShowEndDatePicker(!showEndDatePicker);
+                setShowStartDatePicker(false);
+              }}
+            >
+              <Image
+                source={require('../../assets/images/calendar-icon.png')}
+                style={styles.dateIcon}
+                resizeMode="contain"
+              />
+              <Text style={styles.dateText}>{formatDate(endDate)}</Text>
+            </TouchableOpacity>
+            
+            {showEndDatePicker && (
+              <View style={styles.datePickerDropdown}>
+                <DateTimePicker
+                  value={endDate}
+                  mode="date"
+                  display="inline"
+                  onChange={onEndDateChange}
+                  minimumDate={startDate}
+                  style={styles.inlineDatePicker}
+                />
+              </View>
+            )}
+
+            <Text style={styles.helperText}>
+              Duration: {Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24))} days
+            </Text>
           </View>
 
           {/* Budget */}
@@ -614,5 +873,70 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  suggestionsContainer: {
+    marginTop: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    maxHeight: 200,
+    overflow: 'hidden',
+  },
+  suggestionsList: {
+    maxHeight: 200,
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F5F5F5',
+  },
+  suggestionIcon: {
+    width: 16,
+    height: 16,
+    tintColor: '#666',
+  },
+  suggestionText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  dateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 12,
+  },
+  dateIcon: {
+    width: 20,
+    height: 20,
+    tintColor: '#1F3D2B',
+  },
+  dateText: {
+    fontSize: 15,
+    color: '#333',
+    fontWeight: '500',
+  },
+  datePickerDropdown: {
+    marginTop: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  inlineDatePicker: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
   },
 });
