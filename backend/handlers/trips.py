@@ -6,7 +6,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.dynamodb import get_dynamodb_table
-from utils.auth_utils import verify_token
+from utils.auth_utils import extract_user_id
 from utils.response import success_response, error_response
 from boto3.dynamodb.conditions import Key
 
@@ -15,9 +15,8 @@ trips_table = get_dynamodb_table('trips')
 def create_trip(event, context):
     """Create a new trip with detailed questionnaire data"""
     try:
-        token = event['headers'].get('Authorization', '').replace('Bearer ', '')
-        user_data = verify_token(token)
-        if not user_data:
+        user_id = extract_user_id(event)
+        if not user_id:
             return error_response(401, "Unauthorized")
         
         body = json.loads(event['body'])
@@ -29,7 +28,7 @@ def create_trip(event, context):
         
         trip = {
             'trip_id': trip_id,
-            'user_id': user_data['user_id'],
+            'user_id': user_id,
             'type': body.get('type', 'location'),  # location or roadtrip
             'destination': body.get('destination'),
             
@@ -69,19 +68,16 @@ def create_trip(event, context):
 def list_trips(event, context):
     """List all trips for a user"""
     try:
-        token = event['headers'].get('Authorization', '').replace('Bearer ', '')
-        user_data = verify_token(token)
-        if not user_data:
+        user_id = extract_user_id(event)
+        if not user_id:
             return error_response(401, "Unauthorized")
         
         response = trips_table.query(
             IndexName='user-index',
-            KeyConditionExpression=Key('user_id').eq(user_data['user_id'])
+            KeyConditionExpression=Key('user_id').eq(user_id)
         )
         
-        return success_response({
-            'trips': response['Items']
-        })
+        return success_response(response['Items'])
         
     except Exception as e:
         return error_response(500, str(e))
@@ -89,9 +85,8 @@ def list_trips(event, context):
 def get_trip(event, context):
     """Get a specific trip"""
     try:
-        token = event['headers'].get('Authorization', '').replace('Bearer ', '')
-        user_data = verify_token(token)
-        if not user_data:
+        user_id = extract_user_id(event)
+        if not user_id:
             return error_response(401, "Unauthorized")
         
         trip_id = event['pathParameters']['trip_id']
@@ -103,7 +98,7 @@ def get_trip(event, context):
         trip = response['Item']
         
         # Verify ownership
-        if trip['user_id'] != user_data['user_id']:
+        if trip['user_id'] != user_id:
             return error_response(403, "Forbidden")
         
         return success_response(trip)
@@ -114,9 +109,8 @@ def get_trip(event, context):
 def update_trip(event, context):
     """Update a trip"""
     try:
-        token = event['headers'].get('Authorization', '').replace('Bearer ', '')
-        user_data = verify_token(token)
-        if not user_data:
+        user_id = extract_user_id(event)
+        if not user_id:
             return error_response(401, "Unauthorized")
         
         trip_id = event['pathParameters']['trip_id']
@@ -128,7 +122,7 @@ def update_trip(event, context):
             return error_response(404, "Trip not found")
         
         trip = response['Item']
-        if trip['user_id'] != user_data['user_id']:
+        if trip['user_id'] != user_id:
             return error_response(403, "Forbidden")
         
         # Update trip
@@ -162,9 +156,8 @@ def update_trip(event, context):
 def delete_trip(event, context):
     """Delete a trip"""
     try:
-        token = event['headers'].get('Authorization', '').replace('Bearer ', '')
-        user_data = verify_token(token)
-        if not user_data:
+        user_id = extract_user_id(event)
+        if not user_id:
             return error_response(401, "Unauthorized")
         
         trip_id = event['pathParameters']['trip_id']
@@ -175,7 +168,7 @@ def delete_trip(event, context):
             return error_response(404, "Trip not found")
         
         trip = response['Item']
-        if trip['user_id'] != user_data['user_id']:
+        if trip['user_id'] != user_id:
             return error_response(403, "Forbidden")
         
         trips_table.delete_item(Key={'trip_id': trip_id})

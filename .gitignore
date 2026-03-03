@@ -62,3 +62,8 @@ build/
 *.mobileprovision
 *.orig.*
 web-build/
+AWSCLIV2.pkg
+
+keys.txt
+setup-backend.sh
+verify-user.sh

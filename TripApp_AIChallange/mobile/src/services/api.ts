@@ -1,14 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// API base URL - configure this based on your deployed backend
-// For local development with serverless offline, use your computer's IP:
-// const API_BASE_URL = 'http://10.0.0.183:3000/dev';
-
-// For deployed backend, use your AWS API Gateway URL:
-// const API_BASE_URL = 'https://YOUR-API-ID.execute-api.us-east-1.amazonaws.com/dev';
-
-// TEMPORARY: Empty URL to use mock data until backend is deployed
-const API_BASE_URL = '';
+// API base URL - Backend is now deployed!
+const API_BASE_URL = 'https://gaq4nwm4l6.execute-api.us-east-1.amazonaws.com/dev';
 
 export interface ApiResponse<T = any> {
   success: boolean;
