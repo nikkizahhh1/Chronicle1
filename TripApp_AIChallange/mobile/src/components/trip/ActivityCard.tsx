@@ -57,13 +57,15 @@ export default function ActivityCard({ activity }: ActivityCardProps) {
         </Text>
 
         {/* Tags */}
-        <View style={styles.tagsContainer}>
-          {activity.tags.map((tag, index) => (
-            <View key={index} style={styles.tag}>
-              <Text style={styles.tagText}>{tag}</Text>
-            </View>
-          ))}
-        </View>
+        {Array.isArray(activity.tags) && activity.tags.length > 0 && (
+          <View style={styles.tagsContainer}>
+            {activity.tags.map((tag, index) => (
+              <View key={index} style={styles.tag}>
+                <Text style={styles.tagText}>{String(tag)}</Text>
+              </View>
+            ))}
+          </View>
+        )}
 
         {/* Duration and Cost */}
         <View style={styles.footer}>

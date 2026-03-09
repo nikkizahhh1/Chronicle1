@@ -6,21 +6,25 @@ import sys
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 import boto3
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from utils.response import success_response, error_response
-from utils.auth_utils import extract_user_id
+from utils.decorators import require_auth
 from utils.dynamodb import get_dynamodb_table
+from utils.error_handler import handle_errors, ExternalServiceError
+from pydantic import ValidationError as PydanticValidationError
+from models.trip_request import AIItineraryRequest
 
 # AWS clients
 bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
 location_client = boto3.client('location', region_name='us-east-1')
 trips_table = get_dynamodb_table('trips')
 
-# Use cross-region inference profile for Claude 3.5 Sonnet
-BEDROCK_MODEL_ID = 'us.anthropic.claude-3-5-sonnet-20241022-v2:0'
+# Use Claude 3 Haiku inference profile (cross-region)
+BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'us.anthropic.claude-3-haiku-20240307-v1:0')
 PLACE_INDEX_NAME = os.environ.get('LOCATION_PLACE_INDEX_NAME', 'TripPlaceIndex')
 
 def search_places(query: str, bias_position: list = None, max_results: int = 10):
@@ -47,6 +51,9 @@ def get_coordinates(location_name: str):
     if results:
         point = results[0]['Place']['Geometry']['Point']
         return {'lat': point[1], 'lon': point[0], 'label': results[0]['Place']['Label']}
+
+    # Log warning but don't fail - coordinates are optional
+    print(f"Warning: Could not find coordinates for location: {location_name}")
     return None
 
 def generate_itinerary_with_ai(trip_data: dict, user_interests: list):
@@ -118,29 +125,35 @@ Requirements:
             ],
             "temperature": 0.7
         }
-        
+
         response = bedrock.invoke_model(
             modelId=BEDROCK_MODEL_ID,
             body=json.dumps(request_body)
         )
-        
+
         response_body = json.loads(response['body'].read())
         ai_text = response_body['content'][0]['text']
-        
+
         # Extract JSON from response
         json_start = ai_text.find('{')
         json_end = ai_text.rfind('}') + 1
-        
+
         if json_start >= 0 and json_end > json_start:
             itinerary_json = ai_text[json_start:json_end]
             itinerary = json.loads(itinerary_json)
             return itinerary
         else:
-            raise ValueError("No valid JSON found in AI response")
-            
+            raise ExternalServiceError('Bedrock', 'AI response did not contain valid JSON')
+
+    except json.JSONDecodeError as e:
+        print(f"JSON parsing error: {str(e)}")
+        raise ExternalServiceError('Bedrock', 'AI returned invalid JSON format')
+    except ExternalServiceError:
+        # Re-raise our custom errors
+        raise
     except Exception as e:
         print(f"Error calling Bedrock: {str(e)}")
-        raise
+        raise ExternalServiceError('Bedrock', f'AI generation failed: {str(e)}')
 
 def get_activities_per_day(intensity: int) -> str:
     activities = {
@@ -162,115 +175,147 @@ def get_intensity_description(level: int) -> str:
     }
     return descriptions.get(level, 'moderate pace')
 
+def convert_floats_to_decimals(obj):
+    """Recursively convert all float values to Decimal for DynamoDB"""
+    if isinstance(obj, list):
+        return [convert_floats_to_decimals(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: convert_floats_to_decimals(value) for key, value in obj.items()}
+    elif isinstance(obj, float):
+        return Decimal(str(obj))
+    else:
+        return obj
+
+@require_auth
+@handle_errors
 def generate(event, context):
     """Generate AI-powered itinerary"""
+    print(f"[AI GEN] Handler called, event keys: {list(event.keys())}")
+
+    # Get authenticated user ID
+    user_id = event['authenticated_user_id']
+    print(f"[AI GEN] Authenticated user ID: {user_id}")
+
+    # Parse request body
+    body = json.loads(event.get('body', '{}'))
+    print(f"[AI GEN] Request body keys: {list(body.keys())}")
+
+    # Validate request with Pydantic
     try:
-        print(f"Received event: {json.dumps(event)}")
+        ai_request = AIItineraryRequest(**body)
+        print(f"[AI GEN] Validation passed: trip_type={ai_request.trip_type}, duration={ai_request.duration}")
+    except PydanticValidationError as e:
+        errors = []
+        for error in e.errors():
+            field = ' -> '.join(str(loc) for loc in error['loc'])
+            errors.append(f"{field}: {error['msg']}")
+        error_msg = f"Validation error: {'; '.join(errors)}"
+        print(f"[AI GEN] ERROR: {error_msg}")
+        return error_response(400, error_msg)
+
+    print(f"[AI GEN] Generating itinerary for user {user_id}, trip_type: {ai_request.trip_type}")
+
+    # Get user interests
+    user_interests = ai_request.interests
+
+    # Convert Pydantic model to dict for backward compatibility
+    body_dict = ai_request.model_dump()
+
+    # Get location coordinates using Amazon Location Service
+    if ai_request.trip_type == 'location':
+        print(f"[AI GEN] Fetching coordinates for destination: {ai_request.destination}")
+        coords = get_coordinates(ai_request.destination)
+        if coords:
+            body_dict['destination_coords'] = coords
+            print(f"[AI GEN] Coordinates found: {coords}")
+    else:
+        print(f"[AI GEN] Fetching coordinates for roadtrip: {ai_request.start_location} to {ai_request.end_location}")
+        start_coords = get_coordinates(ai_request.start_location)
+        end_coords = get_coordinates(ai_request.end_location)
+        if start_coords and end_coords:
+            body_dict['start_coords'] = start_coords
+            body_dict['end_coords'] = end_coords
+            print(f"[AI GEN] Route coordinates found")
+
+    # Generate itinerary with AI
+    print(f"[AI GEN] Calling Bedrock to generate itinerary...")
+    itinerary = generate_itinerary_with_ai(body_dict, user_interests)
+    print(f"[AI GEN] Bedrock generation completed, days: {len(itinerary.get('days', []))}")
+
+    # Geocode activity locations
+    print(f"[AI GEN] Geocoding activity locations...")
+    for day in itinerary.get('days', []):
+        for activity in day.get('activities', []):
+            if activity.get('location'):
+                coords = get_coordinates(activity['location'])
+                if coords:
+                    activity['latitude'] = coords['lat']
+                    activity['longitude'] = coords['lon']
+                    print(f"[AI GEN] Geocoded {activity['name']}: {coords['lat']}, {coords['lon']}")
+    print(f"[AI GEN] Geocoding completed")
+
+    # Create trip in database
+    trip_id = str(uuid.uuid4())
+
+    # Calculate dates
+    start_date = ai_request.start_date
+    if not start_date:
+        start_date = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+
+    duration = ai_request.duration
+    end_date = ai_request.end_date
+    if not end_date:
+        end_date = (datetime.strptime(start_date, '%Y-%m-%d') + timedelta(days=duration)).strftime('%Y-%m-%d')
+
+    # Determine destination for trip record
+    if ai_request.trip_type == 'location':
+        trip_destination = itinerary.get('destination', ai_request.destination)
+    else:  # roadtrip
+        trip_destination = f"{ai_request.start_location} to {ai_request.end_location}"
+
+    trip = {
+        'trip_id': trip_id,
+        'user_id': user_id,
+        'title': itinerary.get('title', f"Trip to {trip_destination}"),
+        'type': ai_request.trip_type,
+        'destination': trip_destination,
+        'start_date': start_date,
+        'end_date': end_date,
+        'budget': ai_request.budget,
+        'duration': duration,
+        'intensity': ai_request.intensity,
+        'group_type': ai_request.group_type,
+        'interests': user_interests,
+        'itinerary': itinerary,
+        'status': 'active',
+        'created_at': datetime.now(timezone.utc).isoformat(),
+        'updated_at': datetime.now(timezone.utc).isoformat()
+    }
+
+    # Add roadtrip-specific fields
+    if ai_request.trip_type == 'roadtrip':
+        trip['start_location'] = ai_request.start_location
+        trip['end_location'] = ai_request.end_location
+        trip['include_gas'] = ai_request.include_gas
+        trip['scenic_route'] = ai_request.scenic_route
         
-        # Extract user ID from JWT
-        user_id = extract_user_id(event)
-        if not user_id:
-            print("ERROR: No user_id found in token")
-            return error_response('Unauthorized', 401)
-        
-        # Parse request body
-        body = json.loads(event.get('body', '{}'))
-        print(f"Request body: {json.dumps(body)}")
-        
-        # Validate required fields
-        trip_type = body.get('trip_type')
-        if trip_type not in ['location', 'roadtrip']:
-            print(f"ERROR: Invalid trip_type: {trip_type}")
-            return error_response('Invalid trip_type. Must be "location" or "roadtrip"')
-        
-        if trip_type == 'location' and not body.get('destination'):
-            print("ERROR: Missing destination for location trip")
-            return error_response('destination is required for location trips')
-        
-        if trip_type == 'roadtrip':
-            if not body.get('start_location') or not body.get('end_location'):
-                print(f"ERROR: Missing locations - start: {body.get('start_location')}, end: {body.get('end_location')}")
-                return error_response('start_location and end_location are required for roadtrips')
-        
-        print(f"Generating itinerary for user {user_id}, trip_type: {trip_type}")
-        
-        # Get user interests
-        user_interests = body.get('interests', [])
-        
-        # Get location coordinates using Amazon Location Service
-        if trip_type == 'location':
-            destination = body.get('destination')
-            coords = get_coordinates(destination)
-            if coords:
-                body['destination_coords'] = coords
-        else:
-            start_coords = get_coordinates(body.get('start_location'))
-            end_coords = get_coordinates(body.get('end_location'))
-            if start_coords and end_coords:
-                body['start_coords'] = start_coords
-                body['end_coords'] = end_coords
-        
-        # Generate itinerary with AI
-        itinerary = generate_itinerary_with_ai(body, user_interests)
-        
-        # Create trip in database
-        trip_id = str(uuid.uuid4())
-        
-        # Calculate dates
-        start_date = body.get('start_date')
-        if not start_date:
-            start_date = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
-        
-        duration = body.get('duration', 3)
-        end_date = body.get('end_date')
-        if not end_date:
-            end_date = (datetime.strptime(start_date, '%Y-%m-%d') + timedelta(days=duration)).strftime('%Y-%m-%d')
-        
-        # Determine destination for trip record
-        if trip_type == 'location':
-            trip_destination = itinerary.get('destination', body.get('destination'))
-        else:  # roadtrip
-            trip_destination = f"{body.get('start_location')} to {body.get('end_location')}"
-        
-        trip = {
-            'trip_id': trip_id,
-            'user_id': user_id,
-            'title': itinerary.get('title', f"Trip to {trip_destination}"),
-            'type': trip_type,
-            'destination': trip_destination,
-            'start_date': start_date,
-            'end_date': end_date,
-            'budget': body.get('budget', 500),
-            'duration': duration,
-            'intensity': body.get('intensity', 3),
-            'group_type': body.get('group_type', 'solo'),
-            'interests': user_interests,
-            'itinerary': itinerary,
-            'status': 'active',
-            'created_at': datetime.now(timezone.utc).isoformat(),
-            'updated_at': datetime.now(timezone.utc).isoformat()
-        }
-        
-        # Add roadtrip-specific fields
-        if trip_type == 'roadtrip':
-            trip['start_location'] = body.get('start_location')
-            trip['end_location'] = body.get('end_location')
-            trip['include_gas'] = body.get('include_gas', False)
-            trip['scenic_route'] = body.get('scenic_route', True)
-        
-        # Save to DynamoDB
+    # Convert floats to Decimals for DynamoDB
+    trip = convert_floats_to_decimals(trip)
+
+    # Save to DynamoDB
+    print(f"[AI GEN] Saving trip {trip_id} to DynamoDB...")
+    try:
         trips_table.put_item(Item=trip)
-        
-        print(f"Trip {trip_id} created successfully")
-        
-        # Return trip data
-        return success_response({
-            'trip_id': trip_id,
-            'trip': trip
-        })
-        
+        print(f"[AI GEN] ✅ Trip {trip_id} saved to DynamoDB successfully")
+        print(f"[AI GEN] Trip keys: {list(trip.keys())}")
+        print(f"[AI GEN] Itinerary has {len(trip.get('itinerary', {}).get('days', []))} days")
     except Exception as e:
-        print(f"Error generating itinerary: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return error_response(f'Failed to generate itinerary: {str(e)}', 500)
+        print(f"[AI GEN] ERROR saving to DynamoDB: {str(e)}")
+        raise
+
+    # Return trip data
+    print(f"[AI GEN] Returning success response")
+    return success_response({
+        'trip_id': trip_id,
+        'trip': trip
+    })

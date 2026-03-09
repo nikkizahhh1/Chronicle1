@@ -125,6 +125,7 @@ export default function TripPreviewScreen({ navigation, route }: any) {
   const [currentDay, setCurrentDay] = useState(1);
   const [tripData, setTripData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchTripData();
@@ -133,6 +134,7 @@ export default function TripPreviewScreen({ navigation, route }: any) {
   const fetchTripData = async () => {
     if (!tripId) {
       // Fallback to mock data if no tripId
+      console.log('[TripPreview] No tripId provided, using mock data');
       setTripData(mockTripData);
       setLoading(false);
       return;
@@ -140,21 +142,45 @@ export default function TripPreviewScreen({ navigation, route }: any) {
 
     try {
       setLoading(true);
+      console.log('[TripPreview] Fetching trip:', tripId);
+
       const response = await api.get(`/trips/${tripId}`);
+
+      // LOG FULL RESPONSE
+      console.log('[TripPreview] Response:', {
+        success: response.success,
+        hasData: !!response.data,
+        error: response.error,
+        dataKeys: response.data ? Object.keys(response.data) : []
+      });
 
       if (response.success && response.data) {
         // Transform backend data to match expected format
+        console.log('[TripPreview] Transforming trip data...');
         const transformedData = transformBackendData(response.data);
+        console.log('[TripPreview] Trip loaded successfully');
         setTripData(transformedData);
+        setError(null); // Clear any previous errors
       } else {
-        // Fallback to mock data
-        console.log('Using mock data - backend not connected');
-        setTripData(mockTripData);
+        // LOG ERROR DETAILS
+        console.error('[TripPreview] Fetch failed:', {
+          success: response.success,
+          error: response.error,
+          tripId: tripId
+        });
+        // Set error state instead of silent fallback
+        setError(response.error || 'Failed to load trip from server');
+        setTripData(null);
       }
     } catch (error) {
-      console.error('Failed to fetch trip:', error);
-      // Fallback to mock data
-      setTripData(mockTripData);
+      // LOG EXCEPTION
+      console.error('[TripPreview] Exception:', {
+        message: error instanceof Error ? error.message : 'Unknown',
+        tripId: tripId
+      });
+      // Set error state instead of silent fallback
+      setError(error instanceof Error ? error.message : 'Network error');
+      setTripData(null);
     } finally {
       setLoading(false);
     }
@@ -172,15 +198,15 @@ export default function TripPreviewScreen({ navigation, route }: any) {
         activities: (day.activities || []).map((activity: any, actIndex: number) => ({
           id: `${index}-${actIndex}`,
           stepNumber: actIndex + 1,
-          time: activity.time || 'TBD',
-          category: activity.type || activity.category || 'Activity',
-          name: activity.name,
-          description: activity.description || '',
-          image: activity.image || 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=800',
-          tags: activity.tags || [],
-          duration: activity.durationHours ? `${activity.durationHours} hours` : activity.estimated_duration || 'TBD',
-          cost: activity.costUSD || activity.estimated_cost || 0,
-          rating: activity.rating || 0,
+          time: String(activity.time || 'TBD'),
+          category: String(activity.type || activity.category || 'Activity'),
+          name: String(activity.name || 'Activity'),
+          description: String(activity.description || ''),
+          image: String(activity.image || 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=800'),
+          tags: Array.isArray(activity.tags) ? activity.tags.map(String) : [],
+          duration: String(activity.duration || (activity.durationHours ? `${activity.durationHours} hours` : (activity.estimated_duration || 'TBD'))),
+          cost: typeof activity.cost === 'number' ? activity.cost : (activity.costUSD || activity.estimated_cost || 0),
+          rating: typeof activity.rating === 'number' ? activity.rating : 0,
         })),
       })),
     };
@@ -197,11 +223,36 @@ export default function TripPreviewScreen({ navigation, route }: any) {
     );
   }
 
+  if (error) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorTitle}>Failed to Load Trip</Text>
+          <Text style={styles.errorMessage}>{error}</Text>
+          <View style={styles.errorButtons}>
+            <TouchableOpacity onPress={fetchTripData} style={styles.retryButton}>
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                setTripData(mockTripData);
+                setError(null);
+              }}
+              style={styles.demoButton}
+            >
+              <Text style={styles.demoText}>Use Demo Data</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   if (!tripData) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Failed to load trip</Text>
+          <Text style={styles.errorText}>No trip data available</Text>
           <TouchableOpacity onPress={fetchTripData} style={styles.retryButton}>
             <Text style={styles.retryText}>Retry</Text>
           </TouchableOpacity>
@@ -309,9 +360,9 @@ export default function TripPreviewScreen({ navigation, route }: any) {
         {/* Day Summary */}
         <DaySummary
           dayNumber={currentDay}
-          duration={currentDayData.duration}
-          estimatedCost={currentDayData.estimatedCost}
-          activityCount={currentDayData.activities.length}
+          duration={String(currentDayData.duration || 'TBD')}
+          estimatedCost={String(currentDayData.estimatedCost || 'TBD')}
+          activityCount={currentDayData.activities?.length || 0}
         />
 
         {/* Activities Header */}
@@ -372,10 +423,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20,
   },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1F3D2B',
+    marginBottom: 8,
+  },
+  errorMessage: {
+    fontSize: 16,
+    color: '#8B7355',
+    marginBottom: 20,
+    textAlign: 'center',
+    paddingHorizontal: 20,
+  },
   errorText: {
     fontSize: 18,
     color: '#8B7355',
     marginBottom: 20,
+  },
+  errorButtons: {
+    flexDirection: 'row',
+    gap: 12,
   },
   retryButton: {
     backgroundColor: '#2F6F6D',
@@ -384,6 +452,17 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   retryText: {
+    color: '#F4EBDC',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  demoButton: {
+    backgroundColor: '#C45C2E',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  demoText: {
     color: '#F4EBDC',
     fontSize: 16,
     fontWeight: '600',

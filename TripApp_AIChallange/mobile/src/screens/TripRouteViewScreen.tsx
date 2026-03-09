@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,10 +8,12 @@ import {
   ScrollView,
   Dimensions,
   Image,
+  ActivityIndicator,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types';
 import MapViewWrapper, { MarkerWrapper, PROVIDER } from '../components/map/MapViewWrapper';
+import { api } from '../services/api';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TripRouteView'>;
 
@@ -146,9 +148,114 @@ const mockTripData = {
 };
 
 export default function TripRouteViewScreen({ navigation, route }: Props) {
+  const { tripId } = route.params || {};
   const [selectedDay, setSelectedDay] = useState(1);
-  const tripData = mockTripData;
-  const currentDayData = tripData.days.find((d) => d.dayNumber === selectedDay) || tripData.days[0];
+  const [tripData, setTripData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchTripData();
+  }, [tripId]);
+
+  const fetchTripData = async () => {
+    if (!tripId) {
+      console.log('[TripRouteView] No tripId provided, using mock data');
+      setTripData(mockTripData);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      console.log('[TripRouteView] Fetching trip:', tripId);
+
+      const response = await api.get(`/trips/${tripId}`);
+
+      console.log('[TripRouteView] Response:', {
+        success: response.success,
+        hasData: !!response.data,
+        error: response.error,
+      });
+
+      if (response.success && response.data) {
+        const transformedData = transformBackendData(response.data);
+        console.log('[TripRouteView] Trip loaded successfully');
+        setTripData(transformedData);
+        setError(null);
+      } else {
+        console.error('[TripRouteView] Fetch failed:', response.error);
+        setError(response.error || 'Failed to load trip');
+        setTripData(mockTripData); // Fallback to mock data
+      }
+    } catch (error) {
+      console.error('[TripRouteView] Exception:', error);
+      setError(error instanceof Error ? error.message : 'Network error');
+      setTripData(mockTripData); // Fallback to mock data
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const transformBackendData = (backendTrip: any) => {
+    console.log('[TripRouteView] Transforming backend data:', {
+      trip_id: backendTrip.trip_id,
+      duration: backendTrip.duration,
+      daysCount: backendTrip.itinerary?.days?.length,
+    });
+
+    return {
+      tripId: backendTrip.trip_id,
+      tripName: backendTrip.title || 'Trip',
+      dateRange: `${backendTrip.start_date} - ${backendTrip.end_date}`,
+      totalDays: backendTrip.duration || backendTrip.itinerary?.days?.length || 1,
+      days: (backendTrip.itinerary?.days || []).map((day: any, index: number) => ({
+        dayNumber: day.day || index + 1,
+        date: backendTrip.start_date || 'TBD',
+        duration: `${day.activities?.length || 0} activities`,
+        estimatedCost: day.total_cost ? `$${day.total_cost}` : 'TBD',
+        travelTime: '~30 min',
+        activities: (day.activities || []).map((activity: any, actIndex: number) => ({
+          id: `${index}-${actIndex}`,
+          stepNumber: actIndex + 1,
+          time: String(activity.time || 'TBD'),
+          category: String(activity.category || 'Activity'),
+          name: String(activity.name || 'Activity'),
+          description: String(activity.description || ''),
+          location: String(activity.location || 'Location'),
+          coordinates: activity.coordinates || (activity.latitude && activity.longitude
+            ? { latitude: activity.latitude, longitude: activity.longitude }
+            : null),
+        })),
+      })),
+    };
+  };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#1F3D2B" />
+          <Text style={styles.loadingText}>Loading trip...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!tripData) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>No trip data available</Text>
+          <TouchableOpacity onPress={fetchTripData} style={styles.retryButton}>
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const currentDayData = tripData.days.find((d: any) => d.dayNumber === selectedDay) || tripData.days[0];
 
   // Calculate map region to fit all markers
   const getMapRegion = () => {
@@ -370,6 +477,39 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F4EBDC',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#666',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  errorText: {
+    fontSize: 18,
+    color: '#666',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  retryButton: {
+    backgroundColor: '#1F3D2B',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
   scrollView: {
     flex: 1,

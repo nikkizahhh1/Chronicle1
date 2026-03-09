@@ -1,9 +1,14 @@
 service: travel-assistant-backend
 
+plugins:
+  - serverless-python-requirements
+
 provider:
   name: aws
   runtime: python3.12
   region: us-east-1
+  layers:
+    - Ref: PythonRequirementsLambdaLayer
   environment:
     JWT_SECRET: ${env:JWT_SECRET}
     COGNITO_USER_POOL_ID: ${env:COGNITO_USER_POOL_ID}
@@ -27,6 +32,7 @@ provider:
             - "arn:aws:dynamodb:${self:provider.region}:*:table/users"
             - "arn:aws:dynamodb:${self:provider.region}:*:table/trips"
             - "arn:aws:dynamodb:${self:provider.region}:*:table/travel-pois"
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/trip-photos"
             - "arn:aws:dynamodb:${self:provider.region}:*:table/*/index/*"
         - Effect: Allow
           Action:
@@ -62,6 +68,11 @@ provider:
             - "arn:aws:geo:${self:provider.region}:*:map/*"
             - "arn:aws:geo:${self:provider.region}:*:place-index/*"
             - "arn:aws:geo:${self:provider.region}:*:route-calculator/*"
+        - Effect: Allow
+          Action:
+            - secretsmanager:GetSecretValue
+          Resource:
+            - "arn:aws:secretsmanager:${self:provider.region}:*:secret:tripcraft/jwt-secret-*"
 
 functions:
   signup:
@@ -166,6 +177,14 @@ functions:
       - http:
           path: uploads/trip-photo
           method: post
+          cors: true
+
+  getTripPhotos:
+    handler: handlers/uploads.get_trip_photos
+    events:
+      - http:
+          path: trips/{trip_id}/photos
+          method: get
           cors: true
 
   uploadPoiImage:
@@ -274,7 +293,7 @@ functions:
 
   generateAiItinerary:
     handler: handlers/ai_itinerary.generate
-    timeout: 60
+    timeout: 25
     events:
       - http:
           path: ai/itinerary/generate
@@ -290,7 +309,20 @@ functions:
           cors: true
 
 custom:
-  pythonRequirements: {}
+  pythonRequirements:
+    dockerizePip: false
+    slim: false
+    strip: false
+    layer: true
+    zip: false
+    fileName: requirements.txt
+    pythonBin: "C:\\Users\\Emma Berry\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
+    pipCmdExtraArgs:
+      - "--platform manylinux2014_x86_64"
+      - "--only-binary=:all:"
+      - "--python-version 312"
+      - "--implementation cp"
+      - "--abi cp312"
 
 resources:
   Resources:
